@@ -42,6 +42,15 @@ fn main() {
                             }
                             previous_command = None;
                         }
+                        // Command for printing current directory
+                        "pwd" => {
+                            if let Ok(path) = std::env::current_dir() {
+                                println!("{}", path.display());
+                            } else {
+                                eprintln!("Failed to get current directory");
+                            }
+                            previous_command = None;
+                        }
                         // Command for exiting shell
                         "exit" => {
                             let _ = rl.save_history("history.txt");
