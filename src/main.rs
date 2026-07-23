@@ -4,13 +4,32 @@ use std::process::{Command, Stdio, Child};
 use std::path::Path;
 use std::env;
 
+// Function to generate the current directory prompt that prefixes user input 
+fn get_prompt() -> String {
+    let current_dir = env::current_dir().unwrap_or_default();
+    
+    let path_str = if let Some(home_dir) = dirs::home_dir() {
+        if let Ok(strip_path) = current_dir.strip_prefix(&home_dir) {
+            format!("~{}", Path::new("/").join(strip_path).display())
+        } else {
+            current_dir.display().to_string()
+        }
+    } else {
+        current_dir.display().to_string()
+    };
+
+    format!("{} > ", path_str)
+}
+
 fn main() {
+    // Using rustyline to handle user input
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history("history.txt");
 
     loop {
-        // Reading new input using rustyline
-        let readline = rl.readline("> ");
+        // Starting a new prompt line
+        let prompt = get_prompt();
+        let readline = rl.readline(&prompt);
 
         match readline {
             Ok(line) => {
@@ -44,7 +63,7 @@ fn main() {
                         }
                         // Command for printing current directory
                         "pwd" => {
-                            if let Ok(path) = std::env::current_dir() {
+                            if let Ok(path) = env::current_dir() {
                                 println!("{}", path.display());
                             } else {
                                 eprintln!("Failed to get current directory");
