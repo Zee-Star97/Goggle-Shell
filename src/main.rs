@@ -54,7 +54,13 @@ fn main() {
                     match command {
                         // Explicit command for changing directory
                         "cd" => {
-                            let new_dir = args.peekable().peek().map_or("/", |x| *x);
+                            let default_home = dirs::home_dir(); // Home directory as default
+                            let default_str = default_home
+                                .as_ref()
+                                .and_then(|p| p.to_str())
+                                .unwrap_or("/");
+
+                            let new_dir = args.peekable().peek().copied().unwrap_or(default_str);
                             let root = Path::new(new_dir);
                             if let Err(e) = env::set_current_dir(&root) {
                                 eprintln!("{}", e);
