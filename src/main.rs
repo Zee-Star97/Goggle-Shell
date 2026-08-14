@@ -3,6 +3,7 @@ use rustyline::error::ReadlineError;
 use std::process::{Command, Stdio, Child};
 use std::path::Path;
 use std::env;
+use std::fs::File;
 
 // Function to generate the current directory prompt that prefixes user input 
 fn get_prompt() -> String {
@@ -43,8 +44,17 @@ fn main() {
                 let mut commands = trimmed.split(" | ").peekable();
                 let mut previous_command: Option<Child> = None;
 
-                while let Some(command) = commands.next() {
-                    let mut parts = command.trim().split_whitespace();
+                while let Some(full_command) = commands.next() {
+                    let mut command_str = full_command.trim();
+                    let mut outfile = None;
+
+                    // Parsing input for redirection operator '>'
+                    if let Some(idx) = command_str.find('>') {
+                        outfile = Some(command_str[idx + 1..].trim());
+                        command_str = command_str[..idx].trim();
+                    }
+
+                    let mut parts = command_str.split_whitespace();
                     let command = match parts.next() {
                         Some(cmd) => cmd,
                         None => continue,
@@ -88,7 +98,19 @@ fn main() {
                                 |output: Child| Stdio::from(output.stdout.unwrap()),
                             );
 
-                            let stdout = if commands.peek().is_some() {
+                            // Determining stdout file destination
+                            let stdout = if let Some(file_name) = outfile {
+                                match File::create(file_name) {
+                                    Ok(file) => Stdio::from(file),
+
+                                    // Continue without saving on error
+                                    Err(e) => {     
+                                        eprintln!("Failed to open file {}: {}", file_name, e);
+                                        previous_command = None;
+                                        continue;
+                                    }
+                                }
+                            } else if commands.peek().is_some() {
                                 Stdio::piped()
                             } else {
                                 Stdio::inherit()
