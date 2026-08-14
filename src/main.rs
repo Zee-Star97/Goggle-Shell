@@ -1,5 +1,6 @@
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
+use std::collections::HashMap;
 use std::process::{Command, Stdio, Child};
 use std::path::Path;
 use std::env;
@@ -22,10 +23,49 @@ fn get_prompt() -> String {
     format!("{} > ", path_str)
 }
 
+// Helper function to expand session variables
+fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            let mut var_name = String::new();
+            
+            // Extracting variable name
+            while let Some(&next_c) = chars.peek() {
+                if next_c.is_alphanumeric() || next_c == '_' {
+                    var_name.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            
+            if var_name.is_empty() {
+                result.push('$');
+            } else {
+                // Matching to a current session variable, otherwise environment variable
+                if let Some(val) = session_vars.get(&var_name) {
+                    result.push_str(val);
+                } else if let Ok(val) = env::var(&var_name) {
+                    result.push_str(&val);
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    
+    result
+}
+
 fn main() {
     // Using rustyline to handle user input
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history("history.txt");
+
+    // HashMap to keep track of session variables
+    let mut session_vars: HashMap<String, String> = HashMap::new();
 
     loop {
         // Starting a new prompt line
@@ -40,8 +80,11 @@ fn main() {
                 // Adding valid inputs to user history
                 let _ = rl.add_history_entry(trimmed);
 
+                // Expanding session variables
+                let expanded_line = expand_variables(trimmed, &session_vars);
+
                 // Separating commands if using pipes
-                let mut commands = trimmed.split(" | ").peekable();
+                let mut commands = expanded_line.split(" | ").peekable();
                 let mut previous_command: Option<Child> = None;
 
                 while let Some(full_command) = commands.next() {
@@ -90,6 +133,14 @@ fn main() {
                         "exit" => {
                             let _ = rl.save_history("history.txt");
                             return;
+                        }
+                        // Variable assignment catch
+                        cmd if cmd.contains('=') => {
+                            let mut split = cmd.splitn(2, '=');
+                            if let (Some(key), Some(value)) = (split.next(), split.next()) {
+                                session_vars.insert(key.to_string(), value.to_string());
+                            }
+                            previous_command = None;
                         }
                         // External commands & pipelines
                         command => {
