@@ -5,6 +5,7 @@ use std::process::{Command, Stdio, Child};
 use std::path::Path;
 use std::env;
 use std::fs::{self, File};
+use colored::Colorize;
 
 // Function to generate the current directory prompt that prefixes user input 
 fn get_prompt() -> String {
@@ -20,7 +21,7 @@ fn get_prompt() -> String {
         current_dir.display().to_string()
     };
 
-    format!("{} > ", path_str)
+    format!("{} {} ", path_str.cyan().bold(), ">".green().bold())
 }
 
 // Helper function to expand session variables
@@ -89,6 +90,13 @@ fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
                 continue;
             }
 
+            // Giving directories a unique colour
+            let display_name = if entry.path().is_dir() {
+                name_str.blue().bold().to_string()
+            } else {
+                name_str.to_string()
+            };
+
             // Handling extra information 
             if long_format {
                 if let Ok(metadata) = entry.metadata() {
@@ -96,7 +104,6 @@ fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
                     let size = metadata.len();
                     
                     // Reading file/directory permissions
-                    #[cfg(unix)]
                     let perms = {
                         use std::os::unix::fs::PermissionsExt;
                         let mode = metadata.permissions().mode();
@@ -115,18 +122,15 @@ fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
                         )
                     };
 
-                    #[cfg(not(unix))]
-                    let perms = if is_dir { "d--------" } else { "---------" };
-
                     // Using chrono to display last modifid time
                     let modified = metadata.modified().unwrap_or_else(|_| std::time::SystemTime::now());
                     let datetime: chrono::DateTime<chrono::Local> = modified.into();
                     let time_str = datetime.format("%b %e %H:%M").to_string();
 
-                    println!("{} {:>8} {} {}", perms, size, time_str, name_str);
+                    println!("{} {:>8} {} {}", perms, size, time_str, display_name);
                 }
             } else {
-                print!("{}  ", name_str);
+                print!("{}  ", display_name);
             }
         }
         
@@ -202,7 +206,7 @@ fn main() {
                         // Command for printing current directory
                         "pwd" => {
                             if let Ok(path) = env::current_dir() {
-                                println!("{}", path.display());
+                                println!("{}", path.display().to_string().cyan());
                             } else {
                                 eprintln!("Failed to get current directory");
                             }
