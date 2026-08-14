@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio, Child};
 use std::path::Path;
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 
 // Function to generate the current directory prompt that prefixes user input 
 fn get_prompt() -> String {
@@ -57,6 +57,85 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
     }
     
     result
+}
+
+// Helper function for 'ls' command
+fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
+    let mut show_hidden = false;
+    let mut long_format = false;
+    let mut target_dir = String::from(".");
+
+    // Parsing arguments
+    for arg in args {
+        if arg.starts_with('-') {
+            if arg.contains('a') { show_hidden = true; } // '-a' for hidden files
+            if arg.contains('l') { long_format = true; } // '-l' for extra information
+        } else {
+            target_dir = arg.to_string();
+        }
+    }
+
+    // Reading entries within target directory
+    if let Ok(entries) = fs::read_dir(&target_dir) {
+        let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+        entries.sort_by_key(|e| e.file_name()); // Sorting alphabetically
+
+        for entry in entries {
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+
+            // Handling hidden files
+            if !show_hidden && name_str.starts_with('.') {
+                continue;
+            }
+
+            // Handling extra information 
+            if long_format {
+                if let Ok(metadata) = entry.metadata() {
+                    let is_dir = metadata.is_dir();
+                    let size = metadata.len();
+                    
+                    // Reading file/directory permissions
+                    #[cfg(unix)]
+                    let perms = {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = metadata.permissions().mode();
+                        format!(
+                            "{}{}{}{}{}{}{}{}{}{}",
+                            if is_dir { 'd' } else { '-' },
+                            if mode & 0o400 != 0 { 'r' } else { '-' },
+                            if mode & 0o200 != 0 { 'w' } else { '-' },
+                            if mode & 0o100 != 0 { 'x' } else { '-' },
+                            if mode & 0o040 != 0 { 'r' } else { '-' },
+                            if mode & 0o020 != 0 { 'w' } else { '-' },
+                            if mode & 0o010 != 0 { 'x' } else { '-' },
+                            if mode & 0o004 != 0 { 'r' } else { '-' },
+                            if mode & 0o002 != 0 { 'w' } else { '-' },
+                            if mode & 0o001 != 0 { 'x' } else { '-' }
+                        )
+                    };
+
+                    #[cfg(not(unix))]
+                    let perms = if is_dir { "d--------" } else { "---------" };
+
+                    // Using chrono to display last modifid time
+                    let modified = metadata.modified().unwrap_or_else(|_| std::time::SystemTime::now());
+                    let datetime: chrono::DateTime<chrono::Local> = modified.into();
+                    let time_str = datetime.format("%b %e %H:%M").to_string();
+
+                    println!("{} {:>8} {} {}", perms, size, time_str, name_str);
+                }
+            } else {
+                print!("{}  ", name_str);
+            }
+        }
+        
+        if !long_format {
+            println!();
+        }
+    } else {
+        eprintln!("ls: cannot access '{}': No such file or directory", target_dir);
+    }
 }
 
 fn main() {
@@ -127,6 +206,11 @@ fn main() {
                             } else {
                                 eprintln!("Failed to get current directory");
                             }
+                            previous_command = None;
+                        }
+                        // Command for listing files and directories
+                        "ls" => {
+                            execute_ls(args);
                             previous_command = None;
                         }
                         // Command for exiting shell

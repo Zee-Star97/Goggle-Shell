@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 rustyline = "18.0"
 dirs = "5.0"
+chrono = "0.4"
