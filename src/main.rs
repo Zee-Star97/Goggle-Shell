@@ -6,6 +6,7 @@ use std::path::Path;
 use std::env;
 use std::fs::{self, File};
 use colored::Colorize;
+use glob::glob;
 
 // Function to generate the current directory prompt that prefixes user input 
 fn get_prompt() -> String {
@@ -45,7 +46,7 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
             if var_name.is_empty() {
                 result.push('$');
             } else {
-                // Matching to a current session variable, otherwise environment variable
+                // Matching to either session or environment variable
                 if let Some(val) = session_vars.get(&var_name) {
                     result.push_str(val);
                 } else if let Ok(val) = env::var(&var_name) {
@@ -59,6 +60,36 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
     
     result
 }
+
+// Helper function to expand wildcard/glob characters
+fn expand_globs<'a>(args: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut expanded_args = Vec::new();
+
+    for arg in args {
+        // Detecting wildcard characters
+        if arg.contains('*') || arg.contains('?') {
+            if let Ok(paths) = glob(arg) {
+                let mut matched = false;
+                // Using wildcards to filter results
+                for path in paths.filter_map(Result::ok) {
+                    expanded_args.push(path.to_string_lossy().into_owned());
+                    matched = true;
+                }
+                // Pass whole string if no matches
+                if !matched {
+                    expanded_args.push(arg.to_string());
+                }
+            } else {
+                expanded_args.push(arg.to_string());
+            }
+        } else {
+            expanded_args.push(arg.to_string());
+        }
+    }
+
+    expanded_args
+}
+
 
 // Helper function for 'ls' command
 fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
@@ -185,7 +216,9 @@ fn main() {
                         Some(cmd) => cmd,
                         None => continue,
                     };
-                    let args = parts;
+
+                    // Expanding glob characters
+                    let expanded_args = expand_globs(parts);
 
                     match command {
                         // Explicit command for changing directory
@@ -196,7 +229,7 @@ fn main() {
                                 .and_then(|p| p.to_str())
                                 .unwrap_or("/");
 
-                            let new_dir = args.peekable().peek().copied().unwrap_or(default_str);
+                            let new_dir = expanded_args.first().map(|s| s.as_str()).unwrap_or(default_str);
                             let root = Path::new(new_dir);
                             if let Err(e) = env::set_current_dir(&root) {
                                 eprintln!("{}", e);
@@ -214,7 +247,7 @@ fn main() {
                         }
                         // Command for listing files and directories
                         "ls" => {
-                            execute_ls(args);
+                            execute_ls(expanded_args.iter().map(|s| s.as_str()));
                             previous_command = None;
                         }
                         // Command for exiting shell
@@ -256,7 +289,7 @@ fn main() {
                             };
 
                             let output = Command::new(command)
-                                .args(args)
+                                .args(&expanded_args)
                                 .stdin(stdin)
                                 .stdout(stdout)
                                 .spawn();
