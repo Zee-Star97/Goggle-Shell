@@ -31,7 +31,17 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
-        if c == '$' {
+        if c == '\\' {
+            // Detecting variable character ($)
+            if let Some(&next_c) = chars.peek() {
+                if next_c == '$' {
+                    result.push('$');
+                    chars.next();
+                    continue;
+                }
+            }
+            result.push('\\');
+        } else if c == '$' {
             let mut var_name = String::new();
             
             // Extracting variable name
@@ -75,12 +85,12 @@ fn expand_globs<'a>(args: impl Iterator<Item = &'a str>) -> Vec<String> {
                     expanded_args.push(path.to_string_lossy().into_owned());
                     matched = true;
                 }
-                // Pass whole string if no matches
+                // Strip escaping backslashes if no match is found
                 if !matched {
-                    expanded_args.push(arg.to_string());
+                    expanded_args.push(arg.replace("\\*", "*").replace("\\?", "?"));
                 }
             } else {
-                expanded_args.push(arg.to_string());
+                expanded_args.push(arg.replace("\\*", "*").replace("\\?", "?"));
             }
         } else {
             expanded_args.push(arg.to_string());
@@ -90,6 +100,86 @@ fn expand_globs<'a>(args: impl Iterator<Item = &'a str>) -> Vec<String> {
     expanded_args
 }
 
+#[derive(Debug)]
+struct ParsedCommand {
+    args: Vec<String>,
+    outfile: Option<String>,
+}
+
+// Helper function to serialise and parse input
+fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
+    let mut pipeline = Vec::new();
+    let mut current_args = Vec::new();
+    let mut current_arg = String::new();
+    let mut current_outfile = None;
+    let mut is_redirect = false;
+    
+    let mut chars = input.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next_c) = chars.next() {
+                if next_c == '*' || next_c == '?' {
+                    // Preserving the backslash if followed by special characters
+                    current_arg.push('\\');
+                    current_arg.push(next_c);
+                } else {
+                    // Consuming backslash and pushing escaped characters
+                    current_arg.push(next_c);
+                }
+            }
+        } else if c == '|' {
+            if !current_arg.is_empty() {
+                if is_redirect { current_outfile = Some(current_arg.clone()); } 
+                else { current_args.push(current_arg.clone()); }
+                current_arg.clear();
+            }
+            pipeline.push(ParsedCommand {
+                args: current_args.clone(),
+                outfile: current_outfile.clone(),
+            });
+            current_args.clear();
+            current_outfile = None;
+            is_redirect = false;
+        } else if c == '>' {
+            if !current_arg.is_empty() {
+                current_args.push(current_arg.clone());
+                current_arg.clear();
+            }
+            is_redirect = true;
+        } else if c.is_whitespace() {
+            if !current_arg.is_empty() {
+                if is_redirect {
+                    current_outfile = Some(current_arg.clone());
+                } else {
+                    current_args.push(current_arg.clone());
+                }
+                current_arg.clear();
+            }
+        } else {
+            current_arg.push(c);
+        }
+    }
+    
+    // Pushing final token if present
+    if !current_arg.is_empty() {
+        if is_redirect {
+            current_outfile = Some(current_arg);
+        } else {
+            current_args.push(current_arg);
+        }
+    }
+    
+    // Pushing final command block
+    if !current_args.is_empty() || current_outfile.is_some() {
+        pipeline.push(ParsedCommand {
+            args: current_args,
+            outfile: current_outfile,
+        });
+    }
+    
+    pipeline
+}
 
 // Helper function for 'ls' command
 fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
@@ -197,30 +287,25 @@ fn main() {
                 // Expanding session variables
                 let expanded_line = expand_variables(trimmed, &session_vars);
 
-                // Separating commands if using pipes
-                let mut commands = expanded_line.split(" | ").peekable();
+                // Serialising input to handle special characters
+                let pipeline = parse_pipeline(&expanded_line);
                 let mut previous_command: Option<Child> = None;
+                let mut commands = pipeline.into_iter().peekable();
 
-                while let Some(full_command) = commands.next() {
-                    let mut command_str = full_command.trim();
-                    let mut outfile = None;
-
-                    // Parsing input for redirection operator '>'
-                    if let Some(idx) = command_str.find('>') {
-                        outfile = Some(command_str[idx + 1..].trim());
-                        command_str = command_str[..idx].trim();
-                    }
-
-                    let mut parts = command_str.split_whitespace();
-                    let command = match parts.next() {
+                while let Some(parsed_cmd) = commands.next() {
+                    let mut args_iter = parsed_cmd.args.into_iter();
+                    let command = match args_iter.next() {
                         Some(cmd) => cmd,
                         None => continue,
                     };
 
+                    let args_vec: Vec<String> = args_iter.collect();
+                    
                     // Expanding glob characters
-                    let expanded_args = expand_globs(parts);
+                    let expanded_args = expand_globs(args_vec.iter().map(|s| s.as_str()));
+                    let outfile = parsed_cmd.outfile;
 
-                    match command {
+                    match command.as_str() {
                         // Explicit command for changing directory
                         "cd" => {
                             let default_home = dirs::home_dir(); // Home directory as default
@@ -271,7 +356,7 @@ fn main() {
                             );
 
                             // Determining stdout file destination
-                            let stdout = if let Some(file_name) = outfile {
+                            let stdout = if let Some(ref file_name) = outfile {
                                 match File::create(file_name) {
                                     Ok(file) => Stdio::from(file),
 
