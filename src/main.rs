@@ -299,8 +299,9 @@ fn main() {
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history("history.txt");
 
-    // Hashmap for session variables
+    // Hashmaps for session variables and aliases
     let mut session_vars: HashMap<String, String> = HashMap::new();
+    let mut aliases: HashMap<String, String> = HashMap::new();
 
     loop {
         // Using rustyline to retrieve input
@@ -343,7 +344,23 @@ fn main() {
                     let mut current_success = true;
 
                     while let Some(parsed_cmd) = commands.next() {
-                        let mut args_iter = parsed_cmd.args.into_iter();
+                        let mut raw_args = parsed_cmd.args;
+
+                        // Expanding aliases
+                        if let Some(cmd_name) = raw_args.first() {
+                            if let Some(alias_val) = aliases.get(cmd_name) {
+                                let mut expanded: Vec<String> = alias_val
+                                    .split_whitespace()
+                                    .map(String::from)
+                                    .collect();
+                                
+                                // Appending arguments
+                                expanded.extend(raw_args.into_iter().skip(1));
+                                raw_args = expanded;
+                            }
+                        }
+
+                        let mut args_iter = raw_args.into_iter();
                         let command = match args_iter.next() {
                             Some(cmd) => cmd,
                             None => continue,
@@ -356,6 +373,41 @@ fn main() {
 
                         // Matching commands to in-built list 
                         match command.as_str() {
+                            "alias" => {
+                                // Setting up command aliases
+                                if expanded_args.is_empty() {
+                                    // Typing simply 'alias' prints list of aliases 
+                                    for (name, val) in &aliases {
+                                        println!("alias {}='{}'", name, val);
+                                    }
+                                } else {
+                                    // Assigning a new alias
+                                    for arg in &expanded_args {
+                                        if let Some((name, val)) = arg.split_once('=') {
+                                            let clean_val = val.trim_matches(|c| c == '\'' || c == '"').to_string();
+                                            aliases.insert(name.to_string(), clean_val);
+                                        } else {
+                                            // Print usage information
+                                            eprintln!("alias: invalid format '{}'. Use name=\"value\"", arg);
+                                        }
+                                    }
+                                }
+                                current_success = true;
+                                previous_command = None;
+                            }
+                            "unalias" => {
+                                // Remove an alias entry
+                                if expanded_args.is_empty() {
+                                    eprintln!("unalias: incomplete command. Try: unalias [name]");
+                                    current_success = false;
+                                } else {
+                                    for arg in &expanded_args {
+                                        aliases.remove(arg);
+                                    }
+                                    current_success = true;
+                                }
+                                previous_command = None;
+                            }
                             "cd" => {
                                 // Changing directory
                                 let default_home = dirs::home_dir();
