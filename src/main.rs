@@ -32,7 +32,6 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
 
     while let Some(c) = chars.next() {
         if c == '\\' {
-            // Detecting variable character ($)
             if let Some(&next_c) = chars.peek() {
                 if next_c == '$' {
                     result.push('$');
@@ -44,7 +43,6 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
         } else if c == '$' {
             let mut var_name = String::new();
             
-            // Extracting variable name
             while let Some(&next_c) = chars.peek() {
                 if next_c.is_alphanumeric() || next_c == '_' {
                     var_name.push(chars.next().unwrap());
@@ -56,7 +54,6 @@ fn expand_variables(input: &str, session_vars: &HashMap<String, String>) -> Stri
             if var_name.is_empty() {
                 result.push('$');
             } else {
-                // Matching to either session or environment variable
                 if let Some(val) = session_vars.get(&var_name) {
                     result.push_str(val);
                 } else if let Ok(val) = env::var(&var_name) {
@@ -76,16 +73,13 @@ fn expand_globs<'a>(args: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut expanded_args = Vec::new();
 
     for arg in args {
-        // Detecting wildcard characters
         if arg.contains('*') || arg.contains('?') {
             if let Ok(paths) = glob(arg) {
                 let mut matched = false;
-                // Using wildcards to filter results
                 for path in paths.filter_map(Result::ok) {
                     expanded_args.push(path.to_string_lossy().into_owned());
                     matched = true;
                 }
-                // Strip escaping backslashes if no match is found
                 if !matched {
                     expanded_args.push(arg.replace("\\*", "*").replace("\\?", "?"));
                 }
@@ -106,7 +100,54 @@ struct ParsedCommand {
     outfile: Option<String>,
 }
 
-// Helper function to serialise and parse input
+#[derive(Debug, Clone, PartialEq)]
+enum LogicalOp {
+    And,    // &&
+    Or,     // ||
+    Always, // ;
+    None,
+}
+
+// Helper function to parse logical operators
+fn parse_logic_chains(input: &str) -> Vec<(String, LogicalOp)> {
+    let mut chains = Vec::new();
+    let mut current_cmd = String::new();
+    let mut chars = input.chars().peekable();
+    let mut current_op = LogicalOp::None;
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            current_cmd.push(c);
+            if let Some(next_c) = chars.next() {
+                current_cmd.push(next_c);
+            }
+        } else if c == '&' && chars.peek() == Some(&'&') {
+            chars.next();
+            chains.push((current_cmd.clone(), current_op));
+            current_cmd.clear();
+            current_op = LogicalOp::And;
+        } else if c == '|' && chars.peek() == Some(&'|') {
+            chars.next();
+            chains.push((current_cmd.clone(), current_op));
+            current_cmd.clear();
+            current_op = LogicalOp::Or;
+        } else if c == ';' {
+            chains.push((current_cmd.clone(), current_op));
+            current_cmd.clear();
+            current_op = LogicalOp::Always;
+        } else {
+            current_cmd.push(c);
+        }
+    }
+    
+    if !current_cmd.trim().is_empty() {
+        chains.push((current_cmd, current_op));
+    }
+    
+    chains
+}
+
+// Helper function to serialise and parse pipelines
 fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
     let mut pipeline = Vec::new();
     let mut current_args = Vec::new();
@@ -120,11 +161,9 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
         if c == '\\' {
             if let Some(next_c) = chars.next() {
                 if next_c == '*' || next_c == '?' {
-                    // Preserving the backslash if followed by special characters
                     current_arg.push('\\');
                     current_arg.push(next_c);
                 } else {
-                    // Consuming backslash and pushing escaped characters
                     current_arg.push(next_c);
                 }
             }
@@ -161,7 +200,6 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
         }
     }
     
-    // Pushing final token if present
     if !current_arg.is_empty() {
         if is_redirect {
             current_outfile = Some(current_arg);
@@ -170,7 +208,6 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
         }
     }
     
-    // Pushing final command block
     if !current_args.is_empty() || current_outfile.is_some() {
         pipeline.push(ParsedCommand {
             args: current_args,
@@ -182,49 +219,43 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
 }
 
 // Helper function for 'ls' command
-fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
+fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) -> bool {
     let mut show_hidden = false;
     let mut long_format = false;
     let mut target_dir = String::from(".");
 
-    // Parsing arguments
     for arg in args {
         if arg.starts_with('-') {
-            if arg.contains('a') { show_hidden = true; } // '-a' for hidden files
-            if arg.contains('l') { long_format = true; } // '-l' for extra information
+            if arg.contains('a') { show_hidden = true; } // Show hidden files
+            if arg.contains('l') { long_format = true; } // Show extra information
         } else {
             target_dir = arg.to_string();
         }
     }
 
-    // Reading entries within target directory
     if let Ok(entries) = fs::read_dir(&target_dir) {
         let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
-        entries.sort_by_key(|e| e.file_name()); // Sorting alphabetically
+        entries.sort_by_key(|e| e.file_name());
 
         for entry in entries {
             let file_name = entry.file_name();
             let name_str = file_name.to_string_lossy();
 
-            // Handling hidden files
             if !show_hidden && name_str.starts_with('.') {
                 continue;
             }
 
-            // Giving directories a unique colour
             let display_name = if entry.path().is_dir() {
                 name_str.blue().bold().to_string()
             } else {
                 name_str.to_string()
             };
 
-            // Handling extra information 
             if long_format {
                 if let Ok(metadata) = entry.metadata() {
                     let is_dir = metadata.is_dir();
                     let size = metadata.len();
                     
-                    // Reading file/directory permissions
                     let perms = {
                         use std::os::unix::fs::PermissionsExt;
                         let mode = metadata.permissions().mode();
@@ -243,7 +274,6 @@ fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
                         )
                     };
 
-                    // Using chrono to display last modifid time
                     let modified = metadata.modified().unwrap_or_else(|_| std::time::SystemTime::now());
                     let datetime: chrono::DateTime<chrono::Local> = modified.into();
                     let time_str = datetime.format("%b %e %H:%M").to_string();
@@ -258,21 +288,22 @@ fn execute_ls<'a>(args: impl Iterator<Item = &'a str>) {
         if !long_format {
             println!();
         }
+        true
     } else {
         eprintln!("ls: cannot access '{}': No such file or directory", target_dir);
+        false
     }
 }
 
 fn main() {
-    // Using rustyline to handle user input
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history("history.txt");
 
-    // HashMap to keep track of session variables
+    // Hashmap for session variables
     let mut session_vars: HashMap<String, String> = HashMap::new();
 
     loop {
-        // Starting a new prompt line
+        // Using rustyline to retrieve input
         let prompt = get_prompt();
         let readline = rl.readline(&prompt);
 
@@ -281,122 +312,156 @@ fn main() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() { continue; }
 
-                // Adding valid inputs to user history
                 let _ = rl.add_history_entry(trimmed);
-
-                // Expanding session variables
                 let expanded_line = expand_variables(trimmed, &session_vars);
+                
+                // Parsing the expanded line into a series of logical chains
+                let chains = parse_logic_chains(&expanded_line);
+                
+                let mut last_success = true;
+                let mut should_exit = false;
 
-                // Serialising input to handle special characters
-                let pipeline = parse_pipeline(&expanded_line);
-                let mut previous_command: Option<Child> = None;
-                let mut commands = pipeline.into_iter().peekable();
+                for (cmd_str, op) in chains {
+                    let cmd_str = cmd_str.trim();
+                    if cmd_str.is_empty() { continue; }
 
-                while let Some(parsed_cmd) = commands.next() {
-                    let mut args_iter = parsed_cmd.args.into_iter();
-                    let command = match args_iter.next() {
-                        Some(cmd) => cmd,
-                        None => continue,
-                    };
+                    // Continue based on previous command status
+                    match op {
+                        LogicalOp::And if !last_success => continue, // Executes on success
+                        LogicalOp::Or if last_success => continue,   // Executes only on failure
+                        LogicalOp::Always => {},                     // Executes regardless of previous result
+                        LogicalOp::None => {},
+                        _ => {}
+                    }
 
-                    let args_vec: Vec<String> = args_iter.collect();
-                    
-                    // Expanding glob characters
-                    let expanded_args = expand_globs(args_vec.iter().map(|s| s.as_str()));
-                    let outfile = parsed_cmd.outfile;
+                    // Parsing and separating command components
+                    let pipeline = parse_pipeline(cmd_str);
+                    if pipeline.is_empty() { continue; }
 
-                    match command.as_str() {
-                        // Explicit command for changing directory
-                        "cd" => {
-                            let default_home = dirs::home_dir(); // Home directory as default
-                            let default_str = default_home
-                                .as_ref()
-                                .and_then(|p| p.to_str())
-                                .unwrap_or("/");
+                    let mut previous_command: Option<Child> = None;
+                    let mut commands = pipeline.into_iter().peekable();
+                    let mut current_success = true;
 
-                            let new_dir = expanded_args.first().map(|s| s.as_str()).unwrap_or(default_str);
-                            let root = Path::new(new_dir);
-                            if let Err(e) = env::set_current_dir(&root) {
-                                eprintln!("{}", e);
-                            }
-                            previous_command = None;
-                        }
-                        // Command for printing current directory
-                        "pwd" => {
-                            if let Ok(path) = env::current_dir() {
-                                println!("{}", path.display().to_string().cyan());
-                            } else {
-                                eprintln!("Failed to get current directory");
-                            }
-                            previous_command = None;
-                        }
-                        // Command for listing files and directories
-                        "ls" => {
-                            execute_ls(expanded_args.iter().map(|s| s.as_str()));
-                            previous_command = None;
-                        }
-                        // Command for exiting shell
-                        "exit" => {
-                            let _ = rl.save_history("history.txt");
-                            return;
-                        }
-                        // Variable assignment catch
-                        cmd if cmd.contains('=') => {
-                            let mut split = cmd.splitn(2, '=');
-                            if let (Some(key), Some(value)) = (split.next(), split.next()) {
-                                session_vars.insert(key.to_string(), value.to_string());
-                            }
-                            previous_command = None;
-                        }
-                        // External commands & pipelines
-                        command => {
-                            let stdin = previous_command.map_or(
-                                Stdio::inherit(),
-                                |output: Child| Stdio::from(output.stdout.unwrap()),
-                            );
+                    while let Some(parsed_cmd) = commands.next() {
+                        let mut args_iter = parsed_cmd.args.into_iter();
+                        let command = match args_iter.next() {
+                            Some(cmd) => cmd,
+                            None => continue,
+                        };
 
-                            // Determining stdout file destination
-                            let stdout = if let Some(ref file_name) = outfile {
-                                match File::create(file_name) {
-                                    Ok(file) => Stdio::from(file),
+                        // Expanding glob characters
+                        let args_vec: Vec<String> = args_iter.collect();
+                        let expanded_args = expand_globs(args_vec.iter().map(|s| s.as_str()));
+                        let outfile = parsed_cmd.outfile;
 
-                                    // Continue without saving on error
-                                    Err(e) => {     
-                                        eprintln!("Failed to open file {}: {}", file_name, e);
-                                        previous_command = None;
-                                        continue;
-                                    }
-                                }
-                            } else if commands.peek().is_some() {
-                                Stdio::piped()
-                            } else {
-                                Stdio::inherit()
-                            };
-
-                            let output = Command::new(command)
-                                .args(&expanded_args)
-                                .stdin(stdin)
-                                .stdout(stdout)
-                                .spawn();
-
-                            match output {
-                                Ok(output) => { previous_command = Some(output); }
-                                Err(e) => {
-                                    previous_command = None;
+                        // Matching commands to in-built list 
+                        match command.as_str() {
+                            "cd" => {
+                                // Changing directory
+                                let default_home = dirs::home_dir();
+                                let default_str = default_home.as_ref().and_then(|p| p.to_str()).unwrap_or("/");
+                                let new_dir = expanded_args.first().map(|s| s.as_str()).unwrap_or(default_str);
+                                
+                                if let Err(e) = env::set_current_dir(Path::new(new_dir)) {
                                     eprintln!("{}", e);
+                                    current_success = false;
+                                } else {
+                                    current_success = true;
+                                }
+                                previous_command = None;
+                            }
+                            "pwd" => {
+                                // Print working directory
+                                if let Ok(path) = env::current_dir() {
+                                    println!("{}", path.display().to_string().cyan());
+                                    current_success = true;
+                                } else {
+                                    eprintln!("Failed to get current directory");
+                                    current_success = false;
+                                }
+                                previous_command = None;
+                            }
+                            "ls" => {
+                                // List target directory contents
+                                current_success = execute_ls(expanded_args.iter().map(|s| s.as_str()));
+                                previous_command = None;
+                            }
+                            "exit" => {
+                                // Exiting shell program
+                                let _ = rl.save_history("history.txt");
+                                should_exit = true;
+                                break;
+                            }
+                            cmd if cmd.contains('=') => {
+                                // Assigning a session variable
+                                let mut split = cmd.splitn(2, '=');
+                                if let (Some(key), Some(value)) = (split.next(), split.next()) {
+                                    session_vars.insert(key.to_string(), value.to_string());
+                                    current_success = true;
+                                } else {
+                                    current_success = false;
+                                }
+                                previous_command = None;
+                            }
+                            command => {
+                                // Delegating unknown command to OS
+                                let stdin = previous_command.map_or(
+                                    Stdio::inherit(),
+                                    |output: Child| Stdio::from(output.stdout.unwrap()),
+                                );
+
+                                let stdout = if let Some(ref file_name) = outfile {
+                                    match File::create(file_name) {
+                                        Ok(file) => Stdio::from(file),
+                                        Err(e) => {     
+                                            eprintln!("Failed to open file {}: {}", file_name, e);
+                                            current_success = false;
+                                            previous_command = None;
+                                            break;
+                                        }
+                                    }
+                                } else if commands.peek().is_some() {
+                                    Stdio::piped()
+                                } else {
+                                    Stdio::inherit()
+                                };
+
+                                // Generating command
+                                let output = Command::new(command)
+                                    .args(&expanded_args)
+                                    .stdin(stdin)
+                                    .stdout(stdout)
+                                    .spawn();
+
+                                match output {
+                                    Ok(output) => { previous_command = Some(output); }
+                                    Err(e) => {
+                                        eprintln!("{}: {}", command, e);
+                                        current_success = false;
+                                        previous_command = None;
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
+
+                    // Checking command exit status
+                    if let Some(mut final_command) = previous_command {
+                        match final_command.wait() {
+                            Ok(status) => current_success = status.success(),
+                            Err(_) => current_success = false,
+                        }
+                    }
+                    
+                    last_success = current_success;
+                    if should_exit { break; }
                 }
 
-                // Waiting until commands are finished before looping
-                if let Some(mut final_command) = previous_command {
-                    let _ = final_command.wait();
-                }
+                if should_exit { break; }
             }
             Err(ReadlineError::Interrupted) => {
-                // Handling interrupt signals without closing shell
+                // Handling interrupt signal without closing shell
                 println!("^C");
             }
             Err(ReadlineError::Eof) => {
