@@ -388,7 +388,8 @@ fn main() {
                                             aliases.insert(name.to_string(), clean_val);
                                         } else {
                                             // Print usage information
-                                            eprintln!("alias: invalid format '{}'. Use name=\"value\"", arg);
+                                            eprintln!("alias: invalid format. Use name=\"value\"");
+                                            return
                                         }
                                     }
                                 }
