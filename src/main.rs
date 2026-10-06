@@ -320,7 +320,6 @@ fn main() {
                 let chains = parse_logic_chains(&expanded_line);
                 
                 let mut last_success = true;
-                let mut should_exit = false;
 
                 for (cmd_str, op) in chains {
                     let cmd_str = cmd_str.trim();
@@ -380,20 +379,22 @@ fn main() {
                                     for (name, val) in &aliases {
                                         println!("alias {}='{}'", name, val);
                                     }
+                                    current_success = true;
                                 } else {
                                     // Assigning a new alias
                                     for arg in &expanded_args {
                                         if let Some((name, val)) = arg.split_once('=') {
                                             let clean_val = val.trim_matches(|c| c == '\'' || c == '"').to_string();
                                             aliases.insert(name.to_string(), clean_val);
+                                            current_success = true;
                                         } else {
                                             // Print usage information
                                             eprintln!("alias: invalid format. Use name=\"value\"");
-                                            return
+                                            current_success = false;
+                                            break;
                                         }
                                     }
                                 }
-                                current_success = true;
                                 previous_command = None;
                             }
                             "unalias" => {
@@ -442,7 +443,6 @@ fn main() {
                             "exit" => {
                                 // Exiting shell program
                                 let _ = rl.save_history("history.txt");
-                                should_exit = true;
                                 break;
                             }
                             cmd if cmd.contains('=') => {
@@ -467,7 +467,7 @@ fn main() {
                                     match File::create(file_name) {
                                         Ok(file) => Stdio::from(file),
                                         Err(e) => {     
-                                            eprintln!("Failed to open file {}: {}", file_name, e);
+                                            eprintln!("Command failed.");
                                             current_success = false;
                                             previous_command = None;
                                             break;
@@ -508,10 +508,8 @@ fn main() {
                     }
                     
                     last_success = current_success;
-                    if should_exit { break; }
                 }
 
-                if should_exit { break; }
             }
             Err(ReadlineError::Interrupted) => {
                 // Handling interrupt signal without closing shell
