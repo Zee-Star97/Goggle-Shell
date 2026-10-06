@@ -154,11 +154,13 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
     let mut current_arg = String::new();
     let mut current_outfile = None;
     let mut is_redirect = false;
-    
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
     let mut chars = input.chars().peekable();
-    
+
     while let Some(c) = chars.next() {
-        if c == '\\' {
+        if c == '\\' && !in_single_quote {
             if let Some(next_c) = chars.next() {
                 if next_c == '*' || next_c == '?' {
                     current_arg.push('\\');
@@ -167,12 +169,20 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
                     current_arg.push(next_c);
                 }
             }
-        } else if c == '|' {
+        } else if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+        } else if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+        } else if c == '|' && !in_single_quote && !in_double_quote {
             if !current_arg.is_empty() {
-                if is_redirect { current_outfile = Some(current_arg.clone()); } 
-                else { current_args.push(current_arg.clone()); }
+                if is_redirect {
+                    current_outfile = Some(current_arg.clone());
+                } else {
+                    current_args.push(current_arg.clone());
+                }
                 current_arg.clear();
             }
+
             pipeline.push(ParsedCommand {
                 args: current_args.clone(),
                 outfile: current_outfile.clone(),
@@ -180,13 +190,13 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
             current_args.clear();
             current_outfile = None;
             is_redirect = false;
-        } else if c == '>' {
+        } else if c == '>' && !in_single_quote && !in_double_quote {
             if !current_arg.is_empty() {
                 current_args.push(current_arg.clone());
                 current_arg.clear();
             }
             is_redirect = true;
-        } else if c.is_whitespace() {
+        } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
             if !current_arg.is_empty() {
                 if is_redirect {
                     current_outfile = Some(current_arg.clone());
@@ -199,7 +209,7 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
             current_arg.push(c);
         }
     }
-    
+
     if !current_arg.is_empty() {
         if is_redirect {
             current_outfile = Some(current_arg);
@@ -207,14 +217,14 @@ fn parse_pipeline(input: &str) -> Vec<ParsedCommand> {
             current_args.push(current_arg);
         }
     }
-    
+
     if !current_args.is_empty() || current_outfile.is_some() {
         pipeline.push(ParsedCommand {
             args: current_args,
             outfile: current_outfile,
         });
     }
-    
+
     pipeline
 }
 
@@ -320,6 +330,7 @@ fn main() {
                 let chains = parse_logic_chains(&expanded_line);
                 
                 let mut last_success = true;
+                let mut should_exit = false;
 
                 for (cmd_str, op) in chains {
                     let cmd_str = cmd_str.trim();
@@ -443,6 +454,7 @@ fn main() {
                             "exit" => {
                                 // Exiting shell program
                                 let _ = rl.save_history("history.txt");
+                                should_exit = true;
                                 break;
                             }
                             cmd if cmd.contains('=') => {
@@ -466,8 +478,8 @@ fn main() {
                                 let stdout = if let Some(ref file_name) = outfile {
                                     match File::create(file_name) {
                                         Ok(file) => Stdio::from(file),
-                                        Err(e) => {     
-                                            eprintln!("Command failed.");
+                                        Err(e) => {
+                                            eprintln!("{}: {}", command, e);
                                             current_success = false;
                                             previous_command = None;
                                             break;
@@ -508,7 +520,10 @@ fn main() {
                     }
                     
                     last_success = current_success;
+                    if should_exit { break; }
                 }
+
+                if should_exit { break; }
 
             }
             Err(ReadlineError::Interrupted) => {
